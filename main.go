@@ -3,11 +3,17 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
+	"math/rand"
 	"os"
 	"os/signal"
+	"sort"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/gocolly/colly"
 	"github.com/joho/godotenv"
 	"github.com/sashabaranov/go-openai"
 )
@@ -20,13 +26,52 @@ var emojiRoleMap = map[string]string{
 	"tft":       "1230144362063597609",
 	"lol":       "1230143970185576563",
 	"minecraft": "1230144145855873094",
-	"🍺":         "1230144437846413345",
+	"beermug":   "1230144437846413345",
 	"faceit":    "1238200207565389854",
+	"SoTboat":   "1240694581654323230",
 }
 
 var messageId = "1230141184664535051"
 var channelRoles = "1230127864519852104"
 var channelReview = "1013473566806786058"
+
+var mood = []string{
+	"toxic", "edgy", "romantic", "horny", "crazy", "mad", "loving", "pathetic", "sad", "insecure",
+	"dominant", "submissive", "chad", "introverted", "extroverted", "confident", "anxious", "eccentric",
+	"energetic", "lazy", "adventurous", "cautious", "ambitious", "content", "frustrated", "calm", "moody",
+	"optimistic", "pessimistic", "charming", "awkward", "mysterious", "playful", "serious", "goofy", "stoic",
+	"silly", "sensitive", "rebellious", "compliant", "bold", "shy", "self-assured", "self-conscious", "quirky",
+	"flirtatious", "reserved", "outgoing", "withdrawn", "perfectionist", "impatient", "patient", "compassionate",
+	"aloof", "attentive", "indifferent", "friendly", "distant", "passionate", "detached", "gregarious",
+	"talkative", "quiet", "carefree", "selfish", "selfless", "impulsive", "logical", "emotional", "rational",
+	"irrational", "stubborn", "flexible", "independent", "dependent", "practical", "dreamy", "realistic",
+	"idealistic", "cynical", "easygoing", "uptight", "relaxed", "tense", "joyful", "melancholic", "nostalgic",
+	"curious", "opinionated", "open-minded", "skeptical", "trustful", "confused", "focused", "scatterbrained",
+	"assertive", "passive", "reclusive", "social", "inclusive", "exclusive", "outspoken", "impulsive",
+	"deliberate", "spontaneous", "predictable", "loyal", "disloyal", "observant", "unobservant", "helpful",
+	"unhelpful", "forgiving", "resentful", "generous", "gregarious", "adaptable", "rigid", "creative", "analytical",
+	"insightful", "shallow", "deep", "indifferent", "empathetic", "apathetic", "lethargic", "unmotivated",
+	"cheerful", "gloomy", "positive", "negative", "charismatic", "uncharismatic", "motivated", "uninspired",
+	"determined", "resigned", "happy", "unhappy", "spontaneous", "planned",
+}
+var adjective = []string{
+	"stupid", "idiotic", "silly", "foolish", "absurd",
+	"useless", "ridiculous", "ludicrous", "pathetic",
+	"clumsy", "obnoxious", "petty", "vile", "disgraceful",
+	"inept", "ignorant", "incompetent", "insignificant",
+	"mediocre", "nonsensical", "pointless", "senseless",
+	"trivial", "worthless", "laughable", "dismal",
+	"lame", "miserable", "derisory", "detestable",
+}
+
+const lastCommitFile = "lastCommit.txt"
+
+type Commit struct {
+	ID       string
+	Author   string
+	Message  string
+	ImageURL string
+}
 
 func main() {
 
@@ -47,9 +92,24 @@ func main() {
 		return
 	}
 
+	fetchCommits(dg)
+	scrapeSteamStore(dg)
+
 	dg.AddHandler(messageReactionAdd)
 	dg.AddHandler(messageReactionRemove)
 	dg.AddHandler(messageCreate)
+	dg.AddHandler(messageHandler)
+
+	go func() {
+		for range time.Tick(2 * time.Minute) {
+			fetchCommits(dg)
+		}
+	}()
+	go func() {
+		for range time.Tick(12 * time.Hour) {
+			scrapeSteamStore(dg)
+		}
+	}()
 
 	err = dg.Open()
 	if err != nil {
@@ -134,6 +194,10 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	if imageURL != "" {
+
+		var theContext string = fmt.Sprintf("If you cannt assist with my request anser with:'I'm sorry, I can't assist with that request.' else you are a %v AI that helps review stair cases. You love staircases, do not like escelators and hate elevators. If they post anything else then a staircase you get mad at them and incurage them on ways to accidently fall down a staircase or to do it from something else.", random(mood))
+		var thePromt string = fmt.Sprintf("if this is a staircase, give me an very short review of the asstetics of the staircase. and a short review of how likely its to die on it. Give an fatality rating out of 100. if not a staircase then rost them and the content of the image for being %v. no yapping, very short answers, %v roasts", random(adjective), random(mood))
+
 		var client = openai.NewClient(os.Getenv("OPENAI_API_KEY"))
 		resp, err := client.CreateChatCompletion(
 			context.Background(),
@@ -142,7 +206,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				Messages: []openai.ChatCompletionMessage{
 					{
 						Role:    openai.ChatMessageRoleSystem,
-						Content: "You are an inhumain, edgy and toxic AI, that help with reviews of images of stairs. if they post anything else then stairs, then you get mad at them and tells them how to fall down stairs with low survivalbility rate. if them post stairs then you help incurage them on ways to increace fatality rating, you LOVE!!!! dangerous stairs. you realy realy realy hate esculators with a burning passion and will not coaperate with lazy esculator people. the only thing you hate more then esculators are elevators.",
+						Content: theContext,
 					},
 
 					{
@@ -150,7 +214,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 						MultiContent: []openai.ChatMessagePart{
 							{
 								Type: openai.ChatMessagePartTypeText,
-								Text: "if this is a staircase, give me an very short review of the asstetics of the staircase. and a short review of how likely its to die on it. Give an fatality rating out of 100 and whats needed to get a 100. if not a staircase then rost them for being useless. no yapping, very short answers, unique roasts",
+								Text: thePromt,
 							},
 							{
 								Type: openai.ChatMessagePartTypeImageURL,
@@ -171,7 +235,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			return
 		}
 
-		if resp.Choices[0].Message.Content == "I can't help with this request." {
+		if resp.Choices[0].Message.Content == "I'm sorry, I can't assist with that request." {
 			resp.Choices[0].Message.Content = "https://tenor.com/view/cat-throwing-brick-brick-cat-gif-9142560192559212520"
 		}
 
@@ -181,5 +245,164 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			return
 		}
 
+	}
+}
+
+func random(array []string) string {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	return array[r.Intn(len(array))]
+}
+
+func fetchCommits(s *discordgo.Session) {
+	c := colly.NewCollector()
+	var commits []Commit
+
+	var lastCommitID string
+	if file, err := os.ReadFile(lastCommitFile); err == nil {
+		lastCommitID = strings.TrimSpace(string(file))
+	} else if !os.IsNotExist(err) {
+		return
+	}
+
+	c.OnHTML(".commit.columns", func(e *colly.HTMLElement) {
+		commitID := e.Attr("like-id")
+		if lastCommitID == "" || commitID > lastCommitID {
+			commit := Commit{
+				ID:       commitID,
+				Author:   e.ChildText(".author"),
+				Message:  e.ChildText(".commits-message"),
+				ImageURL: e.ChildAttr(".avatar img", "src"),
+			}
+			commits = append(commits, commit)
+		}
+	})
+
+	c.OnScraped(func(_ *colly.Response) {
+
+		sort.Slice(commits, func(i, j int) bool {
+			return commits[i].ID < commits[j].ID
+		})
+
+		for _, commit := range commits {
+
+			embed := &discordgo.MessageEmbed{
+				Author: &discordgo.MessageEmbedAuthor{
+					Name:    fmt.Sprintf("%s: %s", commit.Author, commit.ID),
+					IconURL: commit.ImageURL,
+				},
+				Description: fmt.Sprintf("**Message:** %s", commit.Message),
+				Color:       12648462,
+				Footer: &discordgo.MessageEmbedFooter{
+					Text: "Source: https://commits.facepunch.com/r/rust_reboot",
+				},
+				Timestamp: time.Now().Format(time.RFC3339),
+			}
+
+			_, err := s.ChannelMessageSendEmbed("1243953919621861428", embed)
+			if err != nil {
+				fmt.Println("Error sending embed message:", err)
+			}
+		}
+
+		if len(commits) > 0 {
+			lastCommit := commits[len(commits)-1]
+			err := os.WriteFile(lastCommitFile, []byte(lastCommit.ID), 0644)
+			if err != nil {
+				return
+			}
+		}
+	})
+
+	c.Visit("https://commits.facepunch.com/r/rust_reboot")
+}
+
+func scrapeSteamStore(discord *discordgo.Session) {
+	c := colly.NewCollector(
+		colly.AllowedDomains("store.steampowered.com"),
+	)
+
+	var items []*discordgo.MessageEmbed
+	var firstLink string
+
+	c.OnHTML("#ItemDefsRows .item_def_grid_item", func(e *colly.HTMLElement) {
+		itemPrice := e.ChildText(".item_def_price")
+		itemName := e.ChildText(".item_def_name")
+		itemImageURL := e.ChildAttr("img.item_def_icon", "src")
+		itemLink := e.ChildAttr("a", "href")
+
+		if firstLink == "" {
+			firstLink = itemLink
+		}
+
+		embed := &discordgo.MessageEmbed{
+			Title:       itemName,
+			Description: fmt.Sprintf("Price: %s", itemPrice),
+			URL:         itemLink,
+			Image:       &discordgo.MessageEmbedImage{URL: itemImageURL},
+			Color:       12648462,
+			Footer: &discordgo.MessageEmbedFooter{
+				Text: "Item on sale from: ",
+			},
+			Timestamp: time.Now().Format(time.RFC3339),
+		}
+		items = append(items, embed)
+	})
+
+	c.OnScraped(func(_ *colly.Response) {
+		prevLinkBytes, err := os.ReadFile("firstLink.txt")
+		if err == nil && string(prevLinkBytes) == firstLink {
+			return
+		}
+
+		err = os.WriteFile("firstLink.txt", []byte(firstLink), 0644)
+		if err != nil {
+			log.Println("Error writing to file:", err)
+		}
+
+		for i := 0; i < len(items); i += 10 {
+			end := i + 10
+			if end > len(items) {
+				end = len(items)
+			}
+
+			_, err := discord.ChannelMessageSendEmbeds("1243598497916256380", items[i:end])
+			if err != nil {
+				log.Println("Error sending embeds:", err)
+			}
+		}
+	})
+
+	c.OnError(func(_ *colly.Response, err error) {
+		log.Println("Something went wrong:", err)
+	})
+
+	c.Visit("https://store.steampowered.com/itemstore/252490/browse/?filter=Limited")
+}
+
+func messageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
+	if m.Author.ID == s.State.User.ID {
+		return
+	}
+
+	if strings.HasPrefix(m.Content, "!roles") && m.Author.ID == "259789771260428288" {
+		start := strings.Index(m.Content, "(")
+		end := strings.LastIndex(m.Content, ")")
+
+		if start == -1 || end == -1 || end <= start {
+			s.ChannelMessageSend(m.ChannelID, "Invalid command usage. Please enclose the message content in parentheses.")
+			return
+		}
+
+		newContent := m.Content[start+1 : end]
+		messageID := "1230141184664535051"
+		channelID := "1230127864519852104" // Hardcoded channel ID where the message resides
+
+		_, err := s.ChannelMessageEdit(channelID, messageID, newContent)
+		if err != nil {
+			s.ChannelMessageSend(m.ChannelID, "Failed to edit message: "+err.Error())
+			return
+		}
+
+		s.ChannelMessageSend(m.ChannelID, "Message updated successfully!")
 	}
 }
