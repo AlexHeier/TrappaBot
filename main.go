@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -31,9 +32,24 @@ var emojiRoleMap = map[string]string{
 	"SoTboat":   "1240694581654323230",
 }
 
+var TriggerChannels map[string]string = map[string]string{
+	"1237466111449108480": "Faceit",
+	"1236031688346177657": "CS2",
+	"1236035830439743508": "Rust",
+	"1240694963998687253": "SoT",
+	"1236032442754797658": "League",
+	"1236035330021392384": "Phasmo",
+	"1236033935608385654": "Lethal",
+	"1236034392481206403": "TFT",
+	"1236034687592566834": "Minecraft",
+}
+
+var activeVoiceUsers = make(map[string]int)
+
 var messageId = "1230141184664535051"
 var channelRoles = "1230127864519852104"
 var channelReview = "1013473566806786058"
+var GuildID = "1012016741238448278"
 
 var mood = []string{
 	"toxic", "edgy", "romantic", "horny", "crazy", "mad", "loving", "pathetic", "sad", "insecure",
@@ -99,6 +115,8 @@ func main() {
 	dg.AddHandler(messageReactionRemove)
 	dg.AddHandler(messageCreate)
 	dg.AddHandler(messageHandler)
+	dg.AddHandler(voiceStateUpdate)
+	dg.AddHandler(updateVoiceState)
 
 	go func() {
 		for range time.Tick(2 * time.Minute) {
@@ -404,5 +422,88 @@ func messageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 
 		s.ChannelMessageSend(m.ChannelID, "Message updated successfully!")
+	}
+}
+
+func voiceStateUpdate(s *discordgo.Session, v *discordgo.VoiceStateUpdate) {
+	var gameCategories = map[string]string{
+		"Faceit":    "1238426908342091788",
+		"CS2":       "1236031485694181438",
+		"Rust":      "1236035753285521439",
+		"SoT":       "1240694798755561582",
+		"League":    "1236032359363510384",
+		"Phasmo":    "1236034853053403187",
+		"Lethal":    "1236033848458870846",
+		"TFT":       "1236034325649035386",
+		"Minecraft": "1236034481270292585",
+	}
+
+	if gameName, ok := TriggerChannels[v.ChannelID]; ok {
+		channels, _ := s.GuildChannels(GuildID)
+		var existingNumbers []int
+		prefix := fmt.Sprintf("\U0001F509 | %s Voice ", gameName) // Unicode voice emoji
+
+		for _, channel := range channels {
+			if strings.HasPrefix(channel.Name, prefix) {
+				numberStr := strings.TrimPrefix(channel.Name, prefix)
+				if num, err := strconv.Atoi(numberStr); err == nil {
+					existingNumbers = append(existingNumbers, num)
+				}
+			}
+		}
+
+		sort.Ints(existingNumbers)
+		newNumber := 1
+		for _, num := range existingNumbers {
+			if num == newNumber {
+				newNumber++
+			} else {
+				break
+			}
+		}
+
+		newChannelName := fmt.Sprintf("%s%d", prefix, newNumber)
+		parentID, exists := gameCategories[gameName]
+		if !exists {
+			fmt.Println("Category ID not found for the game:", gameName)
+			return
+		}
+
+		channel, err := s.GuildChannelCreateComplex(GuildID, discordgo.GuildChannelCreateData{
+			Name:     newChannelName,
+			Type:     discordgo.ChannelTypeGuildVoice,
+			ParentID: parentID,
+		})
+		if err != nil {
+			fmt.Println("Error creating channel:", err)
+			return
+		}
+
+		err = s.GuildMemberMove(GuildID, v.UserID, &channel.ID)
+		if err != nil {
+			fmt.Println("Error moving member:", err)
+			return
+		}
+
+		activeVoiceUsers[channel.ID] = 1
+
+		go func() {
+			for {
+				<-time.After(3 * time.Second)
+				if activeVoiceUsers[channel.ID] == 0 {
+					s.ChannelDelete(channel.ID)
+					break
+				}
+			}
+		}()
+	}
+}
+
+func updateVoiceState(s *discordgo.Session, v *discordgo.VoiceStateUpdate) {
+	if v.BeforeUpdate != nil && v.BeforeUpdate.ChannelID != "" {
+		activeVoiceUsers[v.BeforeUpdate.ChannelID]--
+	}
+	if v.ChannelID != "" {
+		activeVoiceUsers[v.ChannelID]++
 	}
 }
