@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"flag"
 	"fmt"
 	"log"
 	"math/rand"
@@ -10,46 +12,35 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/gocolly/colly"
+	"github.com/jackc/pgx/v4/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/sashabaranov/go-openai"
 )
 
-var emojiRoleMap = map[string]string{
-	"cs2":       "1230143741118120017",
-	"rust":      "1230144573276426250",
-	"lethal":    "1230143874895183874",
-	"phasmo":    "1230144250994495539",
-	"tft":       "1230144362063597609",
-	"lol":       "1230143970185576563",
-	"minecraft": "1230144145855873094",
-	"beermug":   "1230144437846413345",
-	"faceit":    "1238200207565389854",
-	"SoTboat":   "1240694581654323230",
-}
+var GuildIDflag = flag.String("guild", "", "Test guild ID. If not passed - bot registers commands globally")
+var RemoveCommands = flag.Bool("rmcmd", true, "Remove all commands after shutdowning or not")
 
-var TriggerChannels map[string]string = map[string]string{
-	"1237466111449108480": "Faceit",
-	"1236031688346177657": "CS2",
-	"1236035830439743508": "Rust",
-	"1240694963998687253": "SoT",
-	"1236032442754797658": "League",
-	"1236035330021392384": "Phasmo",
-	"1236033935608385654": "Lethal",
-	"1236034392481206403": "TFT",
-	"1236034687592566834": "Minecraft",
-}
-
-var activeVoiceUsers = make(map[string]int)
+var dg *discordgo.Session
+var dbpool *pgxpool.Pool
 
 var messageId = "1230141184664535051"
 var channelRoles = "1230127864519852104"
 var channelReview = "1013473566806786058"
 var GuildID = "1012016741238448278"
+
+const lastCommitFile = "lastCommit.txt"
+
+type Commit struct {
+	ID       string
+	Author   string
+	Message  string
+	ImageURL string
+}
 
 var mood = []string{
 	"toxic", "edgy", "romantic", "horny", "crazy", "mad", "loving", "pathetic", "sad", "insecure",
@@ -80,33 +71,328 @@ var adjective = []string{
 	"lame", "miserable", "derisory", "detestable",
 }
 
-const lastCommitFile = "lastCommit.txt"
+var commands = []*discordgo.ApplicationCommand{
+	{
+		Name:        "creategame",
+		Description: "creates everything for adding a new game to the discord",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "game_name",
+				Description: "the name of the game to be created",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "name_abbreviation",
+				Description: "short version of the name to be used for the channel",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "emoji",
+				Description: "The emoji auto complited to image",
+				Required:    true,
+			},
+		},
+	},
+	{
+		Name:        "deletegame",
+		Description: "deletes a game category and all things related.",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "game_name",
+				Description: "the name of the game to be deleted",
+				Required:    true,
+			},
+		},
+	},
+}
 
-type Commit struct {
-	ID       string
-	Author   string
-	Message  string
-	ImageURL string
+var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.InteractionCreate){
+	"creategame": func(dg *discordgo.Session, i *discordgo.InteractionCreate) {
+		if err := acknowledgeInteraction(dg, i); err != nil {
+			return
+		}
+
+		adminUserID := os.Getenv("ADMIN_ID")
+		if i.Member.User.ID != adminUserID {
+			response := "You do not have permission to use this command."
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		gameName := strings.ToLower(i.ApplicationCommandData().Options[0].StringValue())
+		abbreviation := i.ApplicationCommandData().Options[1].StringValue()
+		emoji := i.ApplicationCommandData().Options[2].StringValue()
+		randomColor := rand.Intn(0xFFFFFF + 1)
+		hoist := true
+		mentionable := true
+
+		newRole, err := dg.GuildRoleCreate(GuildID, &discordgo.RoleParams{
+			Name:        abbreviation,
+			Color:       &randomColor,
+			Hoist:       &hoist,
+			Mentionable: &mentionable,
+		})
+		if err != nil {
+			response := fmt.Sprintf("Failed to create role %s", abbreviation)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		permissionOverwrites := []*discordgo.PermissionOverwrite{
+			{
+				ID:    newRole.ID,
+				Type:  discordgo.PermissionOverwriteTypeRole,
+				Allow: 0x00000400 | 0x00100000 | 0x00200000 | 0x00000800, // ViewChannel | Connect | Speak | SendMessages
+			},
+			{
+				ID:   GuildID,
+				Type: discordgo.PermissionOverwriteTypeRole,
+				Deny: 0x00000400, // ViewChannel
+			},
+		}
+
+		category, err := dg.GuildChannelCreateComplex(GuildID, discordgo.GuildChannelCreateData{
+			Name:                 "--------- | " + gameName + " | ---------",
+			Type:                 discordgo.ChannelTypeGuildCategory,
+			PermissionOverwrites: permissionOverwrites,
+		})
+		if err != nil {
+			response := "Error creating category."
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		_, err = dg.GuildChannelCreateComplex(GuildID, discordgo.GuildChannelCreateData{
+			Name:                 "\U0001F4C4|" + abbreviation + "-chat",
+			Type:                 discordgo.ChannelTypeGuildText,
+			ParentID:             category.ID,
+			PermissionOverwrites: permissionOverwrites,
+		})
+		if err != nil {
+			response := "Error creating text channel."
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		voiceChannel, err := dg.GuildChannelCreateComplex(GuildID, discordgo.GuildChannelCreateData{
+			Name:                 "\U0001F50A | " + abbreviation,
+			Type:                 discordgo.ChannelTypeGuildVoice,
+			ParentID:             category.ID,
+			PermissionOverwrites: permissionOverwrites,
+		})
+		if err != nil {
+			response := "Error creating voice channel."
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		// Insert data into the database
+		tx, err := dbpool.Begin(context.Background())
+		if err != nil {
+			log.Println("Failed to start transaction:", err)
+			return
+		}
+
+		defer tx.Rollback(context.Background())
+
+		_, err = tx.Exec(context.Background(), "INSERT INTO chategory (chategoryID, roleID, name, emoji, abbreviation) VALUES ($1, $2, $3, $4, $5)", category.ID, newRole.ID, gameName, emoji, abbreviation)
+		if err != nil {
+			log.Println("Failed to insert into chategory:", err)
+			return
+		}
+
+		_, err = tx.Exec(context.Background(), "INSERT INTO mainVoice (chategoryID, channelID) VALUES ($1, $2)", category.ID, voiceChannel.ID)
+		if err != nil {
+			log.Println("Failed to insert into mainVoice:", err)
+			return
+		}
+
+		if err := tx.Commit(context.Background()); err != nil {
+			log.Println("Failed to commit transaction:", err)
+			return
+		}
+
+		if err := updateRoleMessage(dg); err != nil {
+			response := fmt.Sprintf("Error updating role message: %v", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+		}
+
+		response := fmt.Sprintf("Game %s created successfully", gameName)
+		if err := sendResponse(dg, i, response); err != nil {
+			log.Printf("Error sending response: %v", err)
+		}
+	},
+	"deletegame": func(dg *discordgo.Session, i *discordgo.InteractionCreate) {
+		if err := acknowledgeInteraction(dg, i); err != nil {
+			return
+		}
+
+		adminUserID := os.Getenv("ADMIN_ID")
+		if i.Member.User.ID != adminUserID {
+			response := "You do not have permission to use this command."
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		name := strings.ToLower(i.ApplicationCommandData().Options[0].StringValue())
+
+		// Start a database transaction
+		tx, err := dbpool.Begin(context.Background())
+		if err != nil {
+			response := fmt.Sprintf("Failed to start database transaction. Err: %s", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+		defer tx.Rollback(context.Background())
+
+		var chategoryID, roleID string
+		err = tx.QueryRow(context.Background(), "SELECT chategoryID, roleID FROM chategory WHERE name = $1", name).Scan(&chategoryID, &roleID)
+		if err != nil {
+			response := fmt.Sprintf("Failed to find game with the given name. Err: %s", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		// Fetch and delete all child channels
+		channels, err := dg.GuildChannels(GuildID)
+		if err != nil {
+			response := fmt.Sprintf("Failed to fetch channels. Err: %s", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+		for _, channel := range channels {
+			if channel.ParentID == chategoryID {
+				if _, err = dg.ChannelDelete(channel.ID); err != nil {
+					response := fmt.Sprintf("Failed to delete child channel in Discord. Err: %s", err)
+					if err := sendResponse(dg, i, response); err != nil {
+						log.Printf("Error sending response: %v", err)
+					}
+					return
+				}
+			}
+		}
+
+		// Delete the category
+		_, err = dg.ChannelDelete(chategoryID)
+		if err != nil {
+			response := fmt.Sprintf("Failed to delete category channel in Discord. Err: %s", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		// Delete the role in Discord
+		err = dg.GuildRoleDelete(GuildID, roleID)
+		if err != nil {
+			response := fmt.Sprintf("Failed to delete role in Discord. Err: %s", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		_, err = tx.Exec(context.Background(), "DELETE FROM chategory WHERE chategoryID = $1", chategoryID)
+		if err != nil {
+			response := fmt.Sprintf("Failed to delete entry from chategory table. Err: %s", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		// Commit the transaction
+		if err := tx.Commit(context.Background()); err != nil {
+			response := fmt.Sprintf("Failed to commit database transaction. Err: %s", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		if err := updateRoleMessage(dg); err != nil {
+			response := fmt.Sprintf("Error updating role message: %v", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+		}
+
+		// Send a success response
+		response := "Game category, all child channels, and role successfully deleted."
+		if err := sendResponse(dg, i, response); err != nil {
+			log.Printf("Error sending response: %v", err)
+		}
+	},
+}
+
+func init() {
+	flag.Parse()
+	envErr := godotenv.Load()
+	if envErr != nil {
+		log.Fatalf("Error loading .env file: %v", envErr)
+	}
+
+	BotToken := os.Getenv("DISCORD_BOT_TOKEN")
+
+	var err error
+	dg, err = discordgo.New("Bot " + BotToken)
+	if err != nil {
+		log.Fatalf("Invalid bot parameters: %v", err)
+	}
+
+	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
+			h(s, i)
+		}
+	})
+}
+
+func connectToDB() {
+
+	dbUser := os.Getenv("DB_USER")
+	dbPassword := os.Getenv("DB_PASSWORD")
+	dbHost := os.Getenv("DB_HOST")
+	dbPort := os.Getenv("DB_PORT")
+	dbName := os.Getenv("DB_NAME")
+
+	var err error
+	databaseURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s", dbUser, dbPassword, dbHost, dbPort, dbName)
+	dbpool, err = pgxpool.Connect(context.Background(), databaseURL)
+	if err != nil {
+		log.Fatalf("Unable to connect to database: %v\n", err)
+	}
+	fmt.Println("Connected to database.")
+
 }
 
 func main() {
 
-	if _, err := os.Stat(".env"); err == nil {
-		if err := godotenv.Load(); err != nil {
-			fmt.Println("Warning: Error loading .env file:", err)
-		}
-	} else if os.IsNotExist(err) {
-		fmt.Println(".env file does not exist. Environment variables will be loaded from the system environment.")
-	} else {
-		fmt.Println("Error checking .env file:", err)
-	}
-
-	Token := os.Getenv("DISCORD_BOT_TOKEN")
-	dg, err := discordgo.New("Bot " + Token)
-	if err != nil {
-		fmt.Println("error creating Discord session,", err)
-		return
-	}
+	connectToDB()
+	defer dbpool.Close()
 
 	fetchCommits(dg)
 	scrapeSteamStore(dg)
@@ -114,9 +400,11 @@ func main() {
 	dg.AddHandler(messageReactionAdd)
 	dg.AddHandler(messageReactionRemove)
 	dg.AddHandler(messageCreate)
-	dg.AddHandler(messageHandler)
 	dg.AddHandler(voiceStateUpdate)
 	dg.AddHandler(updateVoiceState)
+	dg.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
+		log.Printf("Logged in as: %v#%v", s.State.User.Username, s.State.User.Discriminator)
+	})
 
 	go func() {
 		for range time.Tick(2 * time.Minute) {
@@ -129,36 +417,115 @@ func main() {
 		}
 	}()
 
-	err = dg.Open()
+	err := dg.Open()
 	if err != nil {
 		fmt.Println("error opening connection,", err)
 		return
 	}
 
-	fmt.Println("Bot is now running. Press CTRL-C to exit.")
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
-	<-sc
+	log.Println("Adding commands...")
+	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands))
+	for i, v := range commands {
+		cmd, err := dg.ApplicationCommandCreate(dg.State.User.ID, *GuildIDflag, v)
+		if err != nil {
+			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
+		}
+		registeredCommands[i] = cmd
+	}
 
-	dg.Close()
+	defer dg.Close()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
+	log.Println("Press Ctrl+C to exit")
+	<-stop
+
+	if *RemoveCommands {
+		log.Println("Removing commands...")
+
+		registeredCommands, err := dg.ApplicationCommands(dg.State.User.ID, *GuildIDflag)
+		if err != nil {
+			log.Fatalf("Could not fetch registered commands: %v", err)
+		}
+
+		for _, v := range registeredCommands {
+			err := dg.ApplicationCommandDelete(dg.State.User.ID, *GuildIDflag, v.ID)
+			if err != nil {
+				log.Panicf("Cannot delete '%v' command: %v", v.Name, err)
+			}
+		}
+	}
 }
 
 func getRoleID(emoji string) string {
-	roleID, ok := emojiRoleMap[emoji]
-	if !ok {
+	var roleID string
+
+	// Check if the emoji is a custom emoji (only digits)
+	isCustomEmoji := true
+	for _, char := range emoji {
+		if !unicode.IsDigit(char) {
+			isCustomEmoji = false
+			break
+		}
+	}
+
+	if isCustomEmoji {
+		// Query the entire database for custom emoji
+		rows, err := dbpool.Query(context.Background(), "SELECT emoji, roleID FROM chategory")
+		if err != nil {
+			fmt.Println("Error fetching emojis and roles:", err)
+			return ""
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var dbEmoji, dbRoleID string
+			if err := rows.Scan(&dbEmoji, &dbRoleID); err != nil {
+				fmt.Println("Error scanning row:", err)
+				continue
+			}
+
+			// Check if the database emoji contains the emoji ID
+			if strings.Contains(dbEmoji, emoji) {
+				return dbRoleID
+			}
+		}
+
+		if err := rows.Err(); err != nil {
+			fmt.Println("Error with rows:", err)
+		}
+		return ""
+	}
+
+	// For standard emojis, query directly
+	err := dbpool.QueryRow(context.Background(), "SELECT roleID FROM chategory WHERE emoji = $1", emoji).Scan(&roleID)
+	if err != nil {
+		fmt.Println("Error getting role ID:", err)
 		return ""
 	}
 	return roleID
 }
 
 func messageReactionAdd(s *discordgo.Session, m *discordgo.MessageReactionAdd) {
-
 	if m.ChannelID != channelRoles {
 		return
 	}
 
 	if m.MessageID == messageId {
-		var roleID = getRoleID(m.Emoji.Name)
+
+		// Determine the emoji APIName to use
+		var roleID string
+		if m.Emoji.ID != "" {
+			// Custom emoji
+			roleID = getRoleID(m.Emoji.ID)
+		} else {
+			// Standard emoji
+			roleID = getRoleID(m.Emoji.Name)
+		}
+
+		if roleID == "" {
+			return
+		}
 		err := s.GuildMemberRoleAdd(m.GuildID, m.UserID, roleID)
 		if err != nil {
 			fmt.Println("Error adding role:", err)
@@ -168,13 +535,26 @@ func messageReactionAdd(s *discordgo.Session, m *discordgo.MessageReactionAdd) {
 }
 
 func messageReactionRemove(s *discordgo.Session, m *discordgo.MessageReactionRemove) {
-
 	if m.ChannelID != channelRoles {
 		return
 	}
 
 	if m.MessageID == messageId {
-		var roleID = getRoleID(m.Emoji.Name)
+		log.Println(m.Emoji)
+
+		// Determine the emoji APIName to use
+		var roleID string
+		if m.Emoji.ID != "" {
+			// Custom emoji
+			roleID = getRoleID(m.Emoji.ID)
+		} else {
+			// Standard emoji
+			roleID = getRoleID(m.Emoji.Name)
+		}
+
+		if roleID == "" {
+			return
+		}
 		err := s.GuildMemberRoleRemove(m.GuildID, m.UserID, roleID)
 		if err != nil {
 			fmt.Println("Error removing role:", err)
@@ -397,52 +777,48 @@ func scrapeSteamStore(discord *discordgo.Session) {
 	c.Visit("https://store.steampowered.com/itemstore/252490/browse/?filter=Limited")
 }
 
-func messageHandler(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.ID == s.State.User.ID {
+func voiceStateUpdate(DG *discordgo.Session, v *discordgo.VoiceStateUpdate) {
+	ctx := context.Background()
+
+	// Start a transaction
+	tx, err := dbpool.Begin(ctx)
+	if err != nil {
+		fmt.Println("Error starting transaction:", err)
+		return
+	}
+	defer func() {
+		if err != nil {
+			if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
+				fmt.Printf("Failed to rollback transaction: %v\n", rollbackErr)
+			}
+		}
+	}()
+
+	var categoryID string
+	err = tx.QueryRow(ctx, "SELECT chategoryID FROM mainVoice WHERE channelID = $1", v.ChannelID).Scan(&categoryID)
+	if err != nil {
 		return
 	}
 
-	if strings.HasPrefix(m.Content, "!roles") && m.Author.ID == "259789771260428288" {
-		start := strings.Index(m.Content, "(")
-		end := strings.LastIndex(m.Content, ")")
-
-		if start == -1 || end == -1 || end <= start {
-			s.ChannelMessageSend(m.ChannelID, "Invalid command usage. Please enclose the message content in parentheses.")
-			return
-		}
-
-		newContent := m.Content[start+1 : end]
-		messageID := "1230141184664535051"
-		channelID := "1230127864519852104" // Hardcoded channel ID where the message resides
-
-		_, err := s.ChannelMessageEdit(channelID, messageID, newContent)
+	if categoryID != "" {
+		var abbreviation string
+		err = tx.QueryRow(ctx, "SELECT abbreviation FROM chategory WHERE chategoryID = $1", categoryID).Scan(&abbreviation)
 		if err != nil {
-			s.ChannelMessageSend(m.ChannelID, "Failed to edit message: "+err.Error())
+			fmt.Println("Error querying abbreviation from chategory:", err)
 			return
 		}
 
-		s.ChannelMessageSend(m.ChannelID, "Message updated successfully!")
-	}
-}
+		// Fetch all channels from Discord
+		channels, err := dg.GuildChannels(v.GuildID) // Assuming v.GuildID is the ID of the guild
+		if err != nil {
+			fmt.Println("Failed to fetch channels for guild:", err)
+			return
+		}
 
-func voiceStateUpdate(s *discordgo.Session, v *discordgo.VoiceStateUpdate) {
-	var gameCategories = map[string]string{
-		"Faceit":    "1238426908342091788",
-		"CS2":       "1236031485694181438",
-		"Rust":      "1236035753285521439",
-		"SoT":       "1240694798755561582",
-		"League":    "1236032359363510384",
-		"Phasmo":    "1236034853053403187",
-		"Lethal":    "1236033848458870846",
-		"TFT":       "1236034325649035386",
-		"Minecraft": "1236034481270292585",
-	}
-
-	if gameName, ok := TriggerChannels[v.ChannelID]; ok {
-		channels, _ := s.GuildChannels(GuildID)
 		var existingNumbers []int
-		prefix := fmt.Sprintf("\U0001F509 | %s Voice ", gameName) // Unicode voice emoji
+		prefix := fmt.Sprintf("\U0001F509 | %s Voice ", abbreviation)
 
+		// Iterate over all channels to find existing numbers in channel names
 		for _, channel := range channels {
 			if strings.HasPrefix(channel.Name, prefix) {
 				numberStr := strings.TrimPrefix(channel.Name, prefix)
@@ -463,13 +839,17 @@ func voiceStateUpdate(s *discordgo.Session, v *discordgo.VoiceStateUpdate) {
 		}
 
 		newChannelName := fmt.Sprintf("%s%d", prefix, newNumber)
-		parentID, exists := gameCategories[gameName]
-		if !exists {
-			fmt.Println("Category ID not found for the game:", gameName)
+
+		// Fetch parentID from chategory for the new channel creation
+		var parentID string
+		err = tx.QueryRow(ctx, "SELECT chategoryID FROM chategory WHERE chategoryID = $1", categoryID).Scan(&parentID)
+		if err != nil {
+			fmt.Println("Category ID not found for the category:", categoryID)
 			return
 		}
 
-		channel, err := s.GuildChannelCreateComplex(GuildID, discordgo.GuildChannelCreateData{
+		// Create the new voice channel
+		newChannel, err := dg.GuildChannelCreateComplex(v.GuildID, discordgo.GuildChannelCreateData{
 			Name:     newChannelName,
 			Type:     discordgo.ChannelTypeGuildVoice,
 			ParentID: parentID,
@@ -479,31 +859,174 @@ func voiceStateUpdate(s *discordgo.Session, v *discordgo.VoiceStateUpdate) {
 			return
 		}
 
-		err = s.GuildMemberMove(GuildID, v.UserID, &channel.ID)
+		// Insert the new channel into the chiledVoice table
+		_, err = tx.Exec(ctx, "INSERT INTO chiledVoice (parentChannelID, channelID) VALUES ($1, $2)", v.ChannelID, newChannel.ID)
+		if err != nil {
+			fmt.Printf("Error inserting into chiledVoice: %v, parentChannelID: %s, channelID: %s\n", err, v.ChannelID, newChannel.ID)
+			return
+		}
+
+		// Creates entry for activeVoice for the chiledChannel
+		_, err = tx.Exec(ctx, "INSERT INTO activeVoice (channelID) VALUES ($1)", newChannel.ID)
+		if err != nil {
+			fmt.Printf("Error inserting into activeVoice: %v, channelID: %s\n", err, newChannel.ID)
+			return
+		}
+
+		// Commit the transaction
+		err = tx.Commit(ctx)
+		if err != nil {
+			fmt.Println("Error committing transaction:", err)
+			return
+		}
+
+		fmt.Printf("Successfully inserted into chiledVoice: parentChannelID: %s, channelID: %s\n", v.ChannelID, newChannel.ID)
+
+		// Move the user to the new channel
+		err = dg.GuildMemberMove(v.GuildID, v.UserID, &newChannel.ID)
 		if err != nil {
 			fmt.Println("Error moving member:", err)
 			return
 		}
-
-		activeVoiceUsers[channel.ID] = 1
-
-		go func() {
-			for {
-				<-time.After(3 * time.Second)
-				if activeVoiceUsers[channel.ID] == 0 {
-					s.ChannelDelete(channel.ID)
-					break
-				}
-			}
-		}()
 	}
 }
 
-func updateVoiceState(s *discordgo.Session, v *discordgo.VoiceStateUpdate) {
+func updateVoiceState(dg *discordgo.Session, v *discordgo.VoiceStateUpdate) {
+
+	ctx := context.Background()
+
+	// Determine the relevant channelID based on whether someone joined or left
+	var relevantChannelID string
 	if v.BeforeUpdate != nil && v.BeforeUpdate.ChannelID != "" {
-		activeVoiceUsers[v.BeforeUpdate.ChannelID]--
+		relevantChannelID = v.BeforeUpdate.ChannelID
+	} else if v.ChannelID != "" {
+		relevantChannelID = v.ChannelID
+	} else {
+		// No relevant channel to check, just return
+		return
 	}
-	if v.ChannelID != "" {
-		activeVoiceUsers[v.ChannelID]++
+
+	// Check if the relevant channel exists in chiledVoice
+	var channelID string
+	err := dbpool.QueryRow(ctx, "SELECT channelID FROM chiledVoice WHERE channelID = $1", relevantChannelID).Scan(&channelID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return
+		}
+		return
 	}
+
+	// Process voiceUsers increment or decrement based on voice state changes
+	if v.ChannelID != "" && (v.BeforeUpdate == nil || v.BeforeUpdate.ChannelID != v.ChannelID) {
+
+		// Increment voiceUsers because user has joined a new channel
+		_, err = dbpool.Exec(ctx, "UPDATE activeVoice SET voiceUsers = (voiceUsers + 1) WHERE channelID = $1", v.ChannelID)
+		if err != nil {
+			fmt.Printf("Error incrementing voiceUsers in channel %s: %v\n", v.ChannelID, err)
+		}
+	}
+
+	if v.BeforeUpdate != nil && v.BeforeUpdate.ChannelID != "" && v.BeforeUpdate.ChannelID != v.ChannelID {
+		// Decrement voiceUsers because user has left a channel
+
+		_, err := dbpool.Exec(ctx, "UPDATE activeVoice SET voiceUsers = (voiceUsers - 1) WHERE channelID = $1", v.BeforeUpdate.ChannelID)
+		if err != nil {
+			fmt.Printf("Error decrementing voiceUsers in channel %s: %v\n", v.BeforeUpdate.ChannelID, err)
+			return
+		}
+
+		// Check if voiceUsers is now 0 and delete the channel if so
+		var voiceUsers int
+		err = dbpool.QueryRow(ctx, "SELECT voiceUsers FROM activeVoice WHERE channelID = $1", v.BeforeUpdate.ChannelID).Scan(&voiceUsers)
+		if err != nil {
+			fmt.Printf("Error checking voiceUsers in channel %s: %v\n", v.BeforeUpdate.ChannelID, err)
+			return
+		}
+
+		if voiceUsers <= 0 {
+			// Delete the channel from Discord
+			if _, err := dg.ChannelDelete(v.BeforeUpdate.ChannelID); err != nil {
+				fmt.Printf("Failed to delete channel %s in Discord: %v\n", v.BeforeUpdate.ChannelID, err)
+			}
+			// Delete the channel from the childVoice table
+			_, err = dbpool.Exec(ctx, "DELETE FROM chiledVoice WHERE channelID = $1", v.BeforeUpdate.ChannelID)
+			if err != nil {
+				fmt.Printf("Error deleting channel from childVoice table %s: %v\n", v.BeforeUpdate.ChannelID, err)
+			}
+		}
+	}
+}
+
+func updateRoleMessage(s *discordgo.Session) error {
+	const channelID = "1230127864519852104"
+	const messageID = "1230141184664535051"
+
+	// Fetch all games from the database
+	rows, err := dbpool.Query(context.Background(), "SELECT emoji, name FROM chategory")
+	if err != nil {
+		return fmt.Errorf("failed to fetch games from database: %w", err)
+	}
+	defer rows.Close()
+
+	var messageContent strings.Builder
+	messageContent.WriteString("Welcome to Trappa!\n\nReact with the following emojis to get the roles:\n")
+
+	for rows.Next() {
+		var emoji, name string
+		if err := rows.Scan(&emoji, &name); err != nil {
+			return fmt.Errorf("failed to scan row: %w", err)
+		}
+		messageContent.WriteString(fmt.Sprintf("	%s %s\n", emoji, name))
+	}
+
+	// Edit the existing role message in the specified channel
+	_, err = s.ChannelMessageEdit(channelID, messageID, messageContent.String())
+	if err != nil {
+		return fmt.Errorf("failed to edit role message: %w", err)
+	}
+
+	return nil
+}
+
+func acknowledgeInteraction(dg *discordgo.Session, i *discordgo.InteractionCreate) error {
+	err := dg.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+	if err != nil {
+		log.Printf("Error acknowledging interaction: %v", err)
+	}
+	return err
+}
+
+func sendResponse(dg *discordgo.Session, i *discordgo.InteractionCreate, response string) error {
+	const maxMessageLength = 2000
+
+	if len(response) <= maxMessageLength {
+		_, err := dg.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: response,
+		})
+		if err != nil {
+			log.Printf("Error sending follow-up message: %v", err)
+		}
+		return err
+	}
+
+	for k := 0; k < len(response); k += maxMessageLength {
+		end := k + maxMessageLength
+		if end > len(response) {
+			end = len(response)
+		}
+
+		chunk := response[k:end]
+
+		_, err := dg.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: chunk,
+		})
+		if err != nil {
+			log.Printf("Error sending follow-up message: %v", err)
+			return err
+		}
+	}
+
+	return nil
 }
