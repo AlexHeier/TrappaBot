@@ -226,6 +226,15 @@ var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.Intera
 			return
 		}
 
+		// Update permissions for the specified categories
+		specifiedCategories := []string{"1012016741850820698", "1012016741850820699"}
+		for _, catID := range specifiedCategories {
+			err = dg.ChannelPermissionSet(catID, newRole.ID, discordgo.PermissionOverwriteTypeRole, 0x00000400|0x00100000|0x00200000|0x00000800, 0)
+			if err != nil {
+				log.Printf("Error setting permissions for category %s: %v", catID, err)
+			}
+		}
+
 		if err := updateRoleMessage(dg); err != nil {
 			response := fmt.Sprintf("Error updating role message: %v", err)
 			if err := sendResponse(dg, i, response); err != nil {
@@ -540,7 +549,6 @@ func messageReactionRemove(s *discordgo.Session, m *discordgo.MessageReactionRem
 	}
 
 	if m.MessageID == messageId {
-		log.Println(m.Emoji)
 
 		// Determine the emoji APIName to use
 		var roleID string
