@@ -72,10 +72,3 @@ ALTER TABLE activeVoice
     FOREIGN KEY (channelID)
     REFERENCES chiledVoice (channelID)
     ON DELETE CASCADE;
-
--------------------------------
-
-DROP TABLE IF EXISTS activeVoice;
-DROP TABLE IF EXISTS chiledVoice;
-DROP TABLE IF EXISTS mainVoice;
-DROP TABLE IF EXISTS chategory;

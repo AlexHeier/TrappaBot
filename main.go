@@ -22,19 +22,24 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
+// Variables to manage command-line flags.
 var GuildIDflag = flag.String("guild", "", "Test guild ID. If not passed - bot registers commands globally")
 var RemoveCommands = flag.Bool("rmcmd", true, "Remove all commands after shutdowning or not")
 
+// Global variables for managing Discord session and database pool.
 var dg *discordgo.Session
 var dbpool *pgxpool.Pool
 
+// Variables to identify specific channels and messages.
 var messageId = "1230141184664535051"
 var channelRoles = "1230127864519852104"
 var channelReview = "1013473566806786058"
 var GuildID = "1012016741238448278"
 
+// Constant for managing file paths.
 const lastCommitFile = "lastCommit.txt"
 
+// Struct for holding commit data.
 type Commit struct {
 	ID       string
 	Author   string
@@ -42,6 +47,7 @@ type Commit struct {
 	ImageURL string
 }
 
+// Arrays holding different mood and adjective descriptions for openAI prompts.
 var mood = []string{
 	"toxic", "edgy", "romantic", "horny", "crazy", "mad", "loving", "pathetic", "sad", "insecure",
 	"dominant", "submissive", "chad", "introverted", "extroverted", "confident", "anxious", "eccentric",
@@ -71,6 +77,7 @@ var adjective = []string{
 	"lame", "miserable", "derisory", "detestable",
 }
 
+// Definitions for Discord application commands.
 var commands = []*discordgo.ApplicationCommand{
 	{
 		Name:        "creategame",
@@ -110,7 +117,13 @@ var commands = []*discordgo.ApplicationCommand{
 	},
 }
 
+// commandHandlers maps command names to their respective handler functions.
 var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.InteractionCreate){
+
+	// createGame handles the creation of a new game category, role, and associated channels in Discord.
+	// It inserts related information into the database and sets necessary permissions.
+	// @param dg the Discord session
+	// @param i the interaction creation event that triggered this command
 	"creategame": func(dg *discordgo.Session, i *discordgo.InteractionCreate) {
 		if err := acknowledgeInteraction(dg, i); err != nil {
 			return
@@ -247,6 +260,11 @@ var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.Intera
 			log.Printf("Error sending response: %v", err)
 		}
 	},
+
+	// deleteGame handles the deletion of a game category and all associated channels and roles in Discord.
+	// It also removes corresponding entries from the database.
+	// @param dg the Discord session
+	// @param i the interaction creation event that triggered this command
 	"deletegame": func(dg *discordgo.Session, i *discordgo.InteractionCreate) {
 		if err := acknowledgeInteraction(dg, i); err != nil {
 			return
@@ -358,6 +376,7 @@ var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.Intera
 	},
 }
 
+// init initializes command line flags and loads environment variables.
 func init() {
 	flag.Parse()
 	envErr := godotenv.Load()
@@ -380,6 +399,7 @@ func init() {
 	})
 }
 
+// connectToDB establishes a connection to the PostgreSQL database.
 func connectToDB() {
 
 	dbUser := os.Getenv("DB_USER")
@@ -398,6 +418,7 @@ func connectToDB() {
 
 }
 
+// main sets up the Discord bot connection and command handling.
 func main() {
 
 	connectToDB()
@@ -466,6 +487,9 @@ func main() {
 	}
 }
 
+// getRoleID retrieves the role ID based on emoji data.
+// @param emoji the emoji to lookup
+// @return string the corresponding role ID
 func getRoleID(emoji string) string {
 	var roleID string
 
@@ -515,6 +539,9 @@ func getRoleID(emoji string) string {
 	return roleID
 }
 
+// messageReactionAdd handles adding roles when a reaction is added to a message.
+// @param s the Discord session
+// @param m the reaction addition event
 func messageReactionAdd(s *discordgo.Session, m *discordgo.MessageReactionAdd) {
 	if m.ChannelID != channelRoles {
 		return
@@ -543,6 +570,9 @@ func messageReactionAdd(s *discordgo.Session, m *discordgo.MessageReactionAdd) {
 	}
 }
 
+// messageReactionRemove handles removing roles when a reaction is removed from a message.
+// @param s the Discord session
+// @param m the reaction removal event
 func messageReactionRemove(s *discordgo.Session, m *discordgo.MessageReactionRemove) {
 	if m.ChannelID != channelRoles {
 		return
@@ -571,7 +601,9 @@ func messageReactionRemove(s *discordgo.Session, m *discordgo.MessageReactionRem
 	}
 }
 
-// on message
+// messageCreate processes messages in specific channel and sends the image to openAI.
+// @param s the Discord session
+// @param m the message creation event
 func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 
 	if m.ChannelID != channelReview {
@@ -654,11 +686,16 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 }
 
+// random returns a random string from a given slice.
+// @param array the slice to choose from
+// @return string a random element from the slice
 func random(array []string) string {
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	return array[r.Intn(len(array))]
 }
 
+// fetchCommits scrapes and processes commit data from a web page.
+// @param s the Discord session
 func fetchCommits(s *discordgo.Session) {
 	c := colly.NewCollector()
 	var commits []Commit
@@ -722,6 +759,8 @@ func fetchCommits(s *discordgo.Session) {
 	c.Visit("https://commits.facepunch.com/r/rust_reboot")
 }
 
+// scrapeSteamStore collects and sends embedded messages about store items for the game Rust.
+// @param discord the Discord session
 func scrapeSteamStore(discord *discordgo.Session) {
 	c := colly.NewCollector(
 		colly.AllowedDomains("store.steampowered.com"),
@@ -785,7 +824,10 @@ func scrapeSteamStore(discord *discordgo.Session) {
 	c.Visit("https://store.steampowered.com/itemstore/252490/browse/?filter=Limited")
 }
 
-func voiceStateUpdate(DG *discordgo.Session, v *discordgo.VoiceStateUpdate) {
+// voiceStateUpdate manages voice state updates, potentially creating new voice channels.
+// @param dg the Discord session
+// @param v the voice state update event
+func voiceStateUpdate(dg *discordgo.Session, v *discordgo.VoiceStateUpdate) {
 	ctx := context.Background()
 
 	// Start a transaction
@@ -899,6 +941,9 @@ func voiceStateUpdate(DG *discordgo.Session, v *discordgo.VoiceStateUpdate) {
 	}
 }
 
+// updateVoiceState processes updates to voice states for maintaining voice channel activity.
+// @param dg the Discord session
+// @param v the voice state update event
 func updateVoiceState(dg *discordgo.Session, v *discordgo.VoiceStateUpdate) {
 
 	ctx := context.Background()
@@ -965,6 +1010,9 @@ func updateVoiceState(dg *discordgo.Session, v *discordgo.VoiceStateUpdate) {
 	}
 }
 
+// updateRoleMessage updates the message that lists roles in a specific channel.
+// @param s the Discord session
+// @return error potential error during the update process
 func updateRoleMessage(s *discordgo.Session) error {
 	const channelID = "1230127864519852104"
 	const messageID = "1230141184664535051"
@@ -996,6 +1044,10 @@ func updateRoleMessage(s *discordgo.Session) error {
 	return nil
 }
 
+// acknowledgeInteraction sends an initial response to an interaction.
+// @param dg the Discord session
+// @param i the interaction event
+// @return error potential error during acknowledgment
 func acknowledgeInteraction(dg *discordgo.Session, i *discordgo.InteractionCreate) error {
 	err := dg.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
@@ -1006,6 +1058,11 @@ func acknowledgeInteraction(dg *discordgo.Session, i *discordgo.InteractionCreat
 	return err
 }
 
+// sendResponse sends a response to an interaction, handling message length appropriately.
+// @param dg the Discord session
+// @param i the interaction event
+// @param response the response string
+// @return error potential error during message sending
 func sendResponse(dg *discordgo.Session, i *discordgo.InteractionCreate, response string) error {
 	const maxMessageLength = 2000
 
