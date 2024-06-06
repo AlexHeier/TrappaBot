@@ -15,11 +15,11 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/bwmarrin/discordgo"
-	"github.com/gocolly/colly"
-	"github.com/jackc/pgx/v4/pgxpool"
-	"github.com/joho/godotenv"
-	"github.com/sashabaranov/go-openai"
+	"github.com/bwmarrin/discordgo"     // Discord handling
+	"github.com/gocolly/colly"          // Web scraping
+	"github.com/jackc/pgx/v4/pgxpool"   // Database connection
+	"github.com/joho/godotenv"          // env variables
+	"github.com/sashabaranov/go-openai" // OpenAI
 )
 
 // Variables to manage command-line flags.
@@ -47,7 +47,7 @@ type Commit struct {
 	ImageURL string
 }
 
-// Arrays holding different mood and adjective descriptions for openAI prompts.
+// Arrays holding different mood and adjective descriptions for openAI prompts and respose.
 var mood = []string{
 	"toxic", "edgy", "romantic", "horny", "crazy", "mad", "loving", "pathetic", "sad", "insecure",
 	"dominant", "submissive", "chad", "introverted", "extroverted", "confident", "anxious", "eccentric",
@@ -75,6 +75,14 @@ var adjective = []string{
 	"mediocre", "nonsensical", "pointless", "senseless",
 	"trivial", "worthless", "laughable", "dismal",
 	"lame", "miserable", "derisory", "detestable",
+}
+var gifs = []string{"https://tenor.com/view/shut-up-shush-shh-ok-bird-gif-17679708", "https://tenor.com/view/cat-throwing-brick-brick-cat-gif-9142560192559212520",
+	"https://tenor.com/view/bonk-gif-26414884", "https://tenor.com/view/byuntear-sad-sad-cat-cat-meme-gif-12058012318069999477",
+	"https://tenor.com/view/cat-cat-fight-annoyed-annoyed-cat-gif-2039169220993261012", "https://tenor.com/view/donald-sutherland-goddamn-disappointment-don-donald-mechanic-gif-23830461",
+	"https://tenor.com/view/why-michael-scott-the-office-why-are-the-way-that-you-are-gif-5593972", "https://tenor.com/view/its-always-sunny-dennis-reynolds-dumb-driving-you-dumb-bitch-gif-16430416",
+	"https://tenor.com/view/robin-williams-mrs-doubtfire-get-lost-gif-16430428", "https://tenor.com/view/obama-confused-why-why-tho-but-why-gif-16823464",
+	"https://tenor.com/view/memes-2022-funny-dirty-gif-26230406", "https://tenor.com/view/whyareyougay-uganda-gay-gif-14399349",
+	"https://tenor.com/view/down-syndrome-huh-look-back-what-wtf-gif-14728372", "https://tenor.com/view/you-gif-25833251",
 }
 
 // Definitions for Discord application commands.
@@ -442,7 +450,7 @@ func main() {
 		}
 	}()
 	go func() {
-		for range time.Tick(12 * time.Hour) {
+		for range time.Tick(1 * time.Hour) {
 			scrapeSteamStore(dg)
 		}
 	}()
@@ -674,7 +682,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 
 		if resp.Choices[0].Message.Content == "I'm sorry, I can't assist with that request." {
-			resp.Choices[0].Message.Content = "https://tenor.com/view/cat-throwing-brick-brick-cat-gif-9142560192559212520"
+			resp.Choices[0].Message.Content = random(gifs)
 		}
 
 		_, err = s.ChannelMessageSendReply(m.ChannelID, resp.Choices[0].Message.Content, m.Reference())
