@@ -35,6 +35,7 @@ var messageId = "1230141184664535051"
 var channelRoles = "1230127864519852104"
 var channelReview = "1013473566806786058"
 var GuildID = "1012016741238448278"
+var rustUpdateChannel = "1243953919621861428"
 
 // Constant for managing file paths.
 const lastCommitFile = "lastCommit.txt"
@@ -450,7 +451,7 @@ func main() {
 		}
 	}()
 	go func() {
-		for range time.Tick(1 * time.Hour) {
+		for range time.Tick(6 * time.Hour) {
 			scrapeSteamStore(dg)
 		}
 	}()
@@ -702,7 +703,7 @@ func random(array []string) string {
 	return array[r.Intn(len(array))]
 }
 
-// fetchCommits scrapes and processes commit data from a web page.
+// fetchCommits scrapes and processes commit data from a web page in batches off 10 to a specified discord channel.
 // @param s the Discord session
 func fetchCommits(s *discordgo.Session) {
 	c := colly.NewCollector()
@@ -749,7 +750,7 @@ func fetchCommits(s *discordgo.Session) {
 				Timestamp: time.Now().Format(time.RFC3339),
 			}
 
-			_, err := s.ChannelMessageSendEmbed("1243953919621861428", embed)
+			_, err := s.ChannelMessageSendEmbed(rustUpdateChannel, embed)
 			if err != nil {
 				fmt.Println("Error sending embed message:", err)
 			}
