@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"os/signal"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -441,6 +442,7 @@ func main() {
 	dg.AddHandler(messageCreate)
 	dg.AddHandler(voiceStateUpdate)
 	dg.AddHandler(updateVoiceState)
+	dg.AddHandler(messageTimer)
 	dg.AddHandler(func(s *discordgo.Session, r *discordgo.Ready) {
 		log.Printf("Logged in as: %v#%v", s.State.User.Username, s.State.User.Discriminator)
 	})
@@ -608,6 +610,90 @@ func messageReactionRemove(s *discordgo.Session, m *discordgo.MessageReactionRem
 			return
 		}
 	}
+}
+
+// messageTimer processes messages and creates a timer if the message contains a time.
+// @param s the Discord session
+// @param m the message creation event
+func messageTimer(s *discordgo.Session, m *discordgo.MessageCreate) {
+
+	if m.Author.ID == "1230113139392122930" {
+		return
+	}
+	// Regular expression to find time durations like "1.5 hours", "1 hour and 15 min", etc.
+	re := regexp.MustCompile(`(?i)(\d+[.,]?\d*)\s*(hour|hours|time|timer|minute|minutes|minutter|minutt|min|mins|sec|sek)`)
+	matches := re.FindAllStringSubmatch(m.Content, -1)
+
+	// If no matches are found, return
+	if len(matches) == 0 {
+		return
+	}
+
+	// Total duration to accumulate time intervals
+	var totalDuration time.Duration
+
+	// Loop through each match and accumulate the total duration
+	for _, match := range matches {
+		// Replace comma with period to normalize the float number
+		numberStr := strings.Replace(match[1], ",", ".", 1)
+
+		// Convert the string to a float
+		number, err := strconv.ParseFloat(numberStr, 64)
+		if err != nil {
+			fmt.Println("Error converting time value:", err)
+			return
+		}
+
+		unit := strings.ToLower(match[2])
+
+		// Determine the duration based on the unit
+		var duration time.Duration
+		switch unit {
+		case "hour", "hours", "time", "timer":
+			duration = time.Duration(number * float64(time.Hour))
+		case "minute", "minutter", "minutt", "minutes", "min", "mins":
+			duration = time.Duration(number * float64(time.Minute))
+		case "sec", "sek":
+			duration = time.Duration(number * float64(time.Second))
+		}
+
+		// Accumulate the total duration
+		totalDuration += duration
+	}
+
+	// Format the total duration
+	var formattedDuration string
+	totalSeconds := int(totalDuration.Seconds())
+
+	if totalSeconds < 60 {
+		formattedDuration = fmt.Sprintf("%d seconds", totalSeconds)
+	} else if totalSeconds < 3600 {
+		formattedDuration = fmt.Sprintf("%.1f minutes", float64(totalSeconds)/60)
+	} else {
+		formattedDuration = fmt.Sprintf("%.1f hours", totalDuration.Hours())
+	}
+
+	// Calculate the Unix timestamp after the total duration
+	futureTime := time.Now().Add(totalDuration).Unix()
+
+	// Create the response message in the required format, including the total time
+	response := fmt.Sprintf("Created timer for: %s (<t:%d:R>)", formattedDuration, futureTime)
+
+	// Send the response message as a reply
+	_, err := s.ChannelMessageSend(m.ChannelID, response)
+	if err != nil {
+		fmt.Println("Error sending message:", err)
+		return
+	}
+
+	// Set a timer to send a message when the time is up
+	time.AfterFunc(totalDuration, func() {
+		// Ping the user who sent the original message
+		_, err := s.ChannelMessageSend(m.ChannelID, fmt.Sprintf("<@%s> Time's up bitch!", m.Author.ID))
+		if err != nil {
+			fmt.Println("Error sending time's up message:", err)
+		}
+	})
 }
 
 // messageCreate processes messages in specific channel and sends the image to openAI.
