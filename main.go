@@ -87,6 +87,22 @@ var gifs = []string{"https://tenor.com/view/shut-up-shush-shh-ok-bird-gif-176797
 	"https://tenor.com/view/down-syndrome-huh-look-back-what-wtf-gif-14728372", "https://tenor.com/view/you-gif-25833251",
 }
 
+type Participant struct {
+	ID   string // User ID
+	Name string // Display name
+}
+
+type Event struct {
+	MessageID    string        // Message ID for the event
+	Message      string        // The main event message
+	Limit        int           // Maximum number of participants
+	UnixTime     int64         // Event time in Unix format
+	Participants []Participant // List of participants
+}
+
+// Global slice to store events
+var events []Event
+
 // Definitions for Discord application commands.
 var commands = []*discordgo.ApplicationCommand{
 	{
@@ -125,10 +141,164 @@ var commands = []*discordgo.ApplicationCommand{
 			},
 		},
 	},
+	{
+		Name:        "event",
+		Description: "creates an event",
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "ping",
+				Description: "a ping for the relevant group.",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "description",
+				Description: "a description of what the event is about. E.g 'cs2 competetive'",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "when",
+				Description: "when the event will take place written as 'HH:MM DD.MM.YY' uses Oslo time. E.g 23:30 21/08/24",
+				Required:    true,
+			},
+			{
+				Type:        discordgo.ApplicationCommandOptionString,
+				Name:        "person_limit",
+				Description: "optional amout of max persons. E.g '5'",
+				Required:    false,
+			},
+		},
+	},
+	{
+		Name:        "help",
+		Description: "displayes some helpfull information",
+	},
 }
 
 // commandHandlers maps command names to their respective handler functions.
 var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.InteractionCreate){
+
+	"help": func(dg *discordgo.Session, i *discordgo.InteractionCreate) {
+		if err := acknowledgeInteraction(dg, i); err != nil {
+			return
+		}
+		response := `
+		# Welcome to **TrappaBot**!
+		 
+		Ｃｏｍｍａｎｄｓ:
+		> **/event <ping> <event description> <event start time> optional: <person limit>**: This command will create a message in https://discord.com/channels/1012016741238448278/1275834535996559400 that people can react to. This will notify the participants when the event start. You can also set the max amout of people allowed at the event!
+		
+		> **/help**: Responds with _this_ message.
+		 
+		Ａｄｍｉｎ Ｃｏｍｍａｎｄｓ:
+		> **/creategame <name of the game> <name abbreviation> <server emoji for the game>**: This command will create everything needed to add a new game to the discord. Channels, roles, permissions and so on!
+		
+		> **/deletegame <name of the game>**: Will delete the game and everything associating with the game. Channels, roles, permissions and so on!
+		`
+		_ = sendResponse(dg, i, response)
+	},
+
+	// event handles the creation of a new event, registration and relavant information
+	// @param dg the Discord session
+	// @param i the interaction creation event that triggered this command
+	"event": func(dg *discordgo.Session, i *discordgo.InteractionCreate) {
+		if err := acknowledgeInteraction(dg, i); err != nil {
+			return
+		}
+
+		// Extract the interaction data
+		ping := i.ApplicationCommandData().Options[0].StringValue()
+		description := strings.ToLower(i.ApplicationCommandData().Options[1].StringValue())
+		timeUnParsed := i.ApplicationCommandData().Options[2].StringValue()
+		maxPersons := 0
+
+		// Parse the optional maxPersons limit
+		if len(i.ApplicationCommandData().Options) > 3 {
+			maxPersonsStr := i.ApplicationCommandData().Options[3].StringValue()
+			var err error
+			maxPersons, err = strconv.Atoi(maxPersonsStr)
+			if err != nil {
+				response := "Error converting person limit to integer"
+				_ = sendResponse(dg, i, response)
+				return
+			}
+		}
+
+		location, err := time.LoadLocation("Europe/Oslo") // Use "Europe/Oslo" for CEST/CET
+		if err != nil {
+			response := "Error loading timezone"
+			_ = sendResponse(dg, i, response)
+			return
+		}
+
+		// Parse the event time
+		timeLayout := "15:04 02.01.06" // Format for HH:MM DD.MM.YY
+		t, err := time.ParseInLocation(timeLayout, timeUnParsed, location)
+		if err != nil {
+			response := "Error parsing time format"
+			_ = sendResponse(dg, i, response)
+			return
+		}
+		unixTime := t.Unix()
+
+		// Channel where the event will be created
+		eventChannelID := "1275834535996559400" // Test channel
+
+		// Build the message content
+		messageContent := fmt.Sprintf("%s\n**Event Description:** %s\n**Time:** <t:%d:R>", ping, description, unixTime)
+		if maxPersons > 0 {
+			messageContent += fmt.Sprintf("\n**Person Limit:** %d", maxPersons)
+		}
+
+		messageComplite := messageContent + fmt.Sprintf("\n**Participants:**\n:fire: %s", i.Member.User.Username)
+
+		// Send the message to the event channel
+		msg, err := dg.ChannelMessageSend(eventChannelID, messageComplite)
+		if err != nil {
+			response := "Error sending event message"
+			_ = sendResponse(dg, i, response)
+			return
+		}
+
+		// Store the event details in the global events slice
+		events = append(events, Event{
+			MessageID: msg.ID,
+			Limit:     maxPersons,
+			UnixTime:  unixTime,
+			Participants: []Participant{ // Create a slice of Participant
+				{
+					ID:   i.Member.User.ID,       // User ID
+					Name: i.Member.User.Username, // Username (for display)
+				},
+			},
+			Message: messageContent,
+		})
+
+		response := fmt.Sprintf("Event: '%s' has been created!", description)
+		_ = sendResponse(dg, i, response)
+
+		// Start a goroutine to handle event notification
+		go func() {
+			// Wait until the event time
+			time.Sleep(time.Until(t))
+
+			// Notify participants
+			for index, event := range events {
+				if event.MessageID == msg.ID {
+					for _, participant := range event.Participants {
+						// Ping each participant
+						_, _ = dg.ChannelMessageSend(eventChannelID, fmt.Sprintf("<@%s>, event is starting now!", participant.ID))
+					}
+
+					// Remove the event from the global slice
+					events = append(events[:index], events[index+1:]...) // Correctly remove the event
+					break
+				}
+			}
+		}()
+	},
 
 	// createGame handles the creation of a new game category, role, and associated channels in Discord.
 	// It inserts related information into the database and sets necessary permissions.
@@ -436,6 +606,9 @@ func main() {
 
 	fetchCommits(dg)
 	scrapeSteamStore(dg)
+
+	dg.AddHandler(updateEventUsers)
+	dg.AddHandler(handleReactionRemove)
 
 	dg.AddHandler(messageReactionAdd)
 	dg.AddHandler(messageReactionRemove)
@@ -1189,4 +1362,111 @@ func sendResponse(dg *discordgo.Session, i *discordgo.InteractionCreate, respons
 	}
 
 	return nil
+}
+
+// Function to update participants when a reaction is added
+func updateEventUsers(dg *discordgo.Session, r *discordgo.MessageReactionAdd) {
+
+	// Find the event corresponding to the message ID
+	var eventIndex int
+	var found bool
+	for i, event := range events {
+		if event.MessageID == r.MessageID {
+			eventIndex = i
+			found = true
+			break
+		}
+	}
+
+	// If no event found, exit
+	if !found {
+		return
+	}
+
+	// Get the event details
+	event := &events[eventIndex] // Get a pointer to modify the event
+
+	// Check if the user is already a participant
+	for _, participant := range event.Participants {
+		if participant.ID == r.UserID {
+			// User is already in the list; exit
+			return
+		}
+	}
+
+	// Get the username for the reaction
+	user, err := dg.GuildMember(r.GuildID, r.UserID)
+	if err != nil {
+		fmt.Println("Error fetching user:", err)
+		return
+	}
+
+	// Check if the limit is reached (if there is a limit)
+	if event.Limit > 0 && len(event.Participants) >= event.Limit {
+		// Remove the reaction to indicate they can't join
+		_ = dg.MessageReactionRemove(r.ChannelID, r.MessageID, r.Emoji.Name, r.UserID)
+		return
+	}
+
+	// Add the user to the participants list with their ID and username
+	event.Participants = append(event.Participants, Participant{ID: r.UserID, Name: user.User.Username})
+
+	// Update the event message with the new list of participants
+	updateEventMessage(dg, r.ChannelID, r.MessageID, event)
+
+}
+
+// Function to handle reaction removal
+func handleReactionRemove(dg *discordgo.Session, r *discordgo.MessageReactionRemove) {
+
+	// Find the event corresponding to the message ID
+	var eventIndex int
+	var found bool
+	for i, event := range events {
+		if event.MessageID == r.MessageID {
+			eventIndex = i
+			found = true
+			break
+		}
+	}
+
+	// If no event found, exit
+	if !found {
+		return
+	}
+
+	// Get the event details
+	event := &events[eventIndex] // Get a pointer to modify the event
+
+	// Remove the user from the participants list
+	for i, participant := range event.Participants {
+		if participant.ID == r.UserID {
+			// Remove the participant from the list
+			event.Participants = append(event.Participants[:i], event.Participants[i+1:]...)
+			break
+		}
+	}
+
+	// Update the event message with the new list of participants
+	updateEventMessage(dg, r.ChannelID, r.MessageID, event)
+}
+
+// Function to update the event message with the current list of participants
+func updateEventMessage(dg *discordgo.Session, channelID, messageID string, event *Event) {
+	participantNames := make([]string, len(event.Participants))
+	for i, participant := range event.Participants {
+		participantNames[i] = participant.Name
+	}
+	if len(participantNames) > 0 {
+		updatedMessage := fmt.Sprintf("%s\n**Participants:**\n:fire: %s", event.Message, strings.Join(participantNames, "\n"))
+		_, err := dg.ChannelMessageEdit(channelID, messageID, updatedMessage)
+		if err != nil {
+			fmt.Println("Error editing message:", err)
+		}
+	} else {
+		_, err := dg.ChannelMessageEdit(channelID, messageID, event.Message)
+		if err != nil {
+			fmt.Println("Error editing message:", err)
+		}
+	}
 }
