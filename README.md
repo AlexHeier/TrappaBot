@@ -25,10 +25,15 @@ DB_NAME=""
 you will also need to change these values at the top of the file:
 
 var messageId = "1230141184664535051"
+
 var channelRoles = "1230127864519852104"
+
 var channelReview = "1013473566806786058"
+
 var GuildID = "1012016741238448278"
+
 var rustUpdateChannel = "1243953919621861428"
+
 
 channelRoles and messageId is for the message in the channel people can interact with to get given roles based on games.
 
