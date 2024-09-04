@@ -48,15 +48,15 @@ The / commands the bot uses. (this message is also the reponse to /help)
 
 Ｃｏｍｍａｎｄｓ:
 
-**/event <ping> <event description> <event start time> optional: <person limit>**: This command will create a message that people can react to. This will notify the participants when the event start. You can also set the max amout of people allowed at the event!
+**/event 'ping' 'event description' 'event start time' optional: 'person limit'**: This command will create a message that people can react to. This will notify the participants when the event start. You can also set the max amout of people allowed at the event!
 		
 **/help**: Responds with _this_ message.
 		 
 Ａｄｍｉｎ Ｃｏｍｍａｎｄｓ:
 
-**/creategame <name of the game> <name abbreviation> <server emoji for the game>**: This command will create everything needed to add a new game to the discord. Channels, roles, permissions and so on!
+**/creategame 'name of the game' 'name abbreviation' 'server emoji for the game'**: This command will create everything needed to add a new game to the discord. Channels, roles, permissions and so on!
 		
-**/deletegame <name of the game>**: Will delete the game and everything associating with the game. Channels, roles, permissions and so on!
+**/deletegame 'name of the game'**: Will delete the game and everything associating with the game. Channels, roles, permissions and so on!
 
 **/purge**: Deletes all chiled channels!
 
