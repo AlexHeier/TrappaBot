@@ -175,10 +175,58 @@ var commands = []*discordgo.ApplicationCommand{
 		Name:        "help",
 		Description: "displayes some helpfull information",
 	},
+	{
+		Name:        "purge",
+		Description: "deletes all chiled channels",
+	},
 }
 
 // commandHandlers maps command names to their respective handler functions.
 var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.InteractionCreate){
+
+	"purge": func(dg *discordgo.Session, i *discordgo.InteractionCreate) {
+		if err := acknowledgeInteraction(dg, i); err != nil {
+			return
+		}
+
+		response := "Deleted all chiled channels"
+
+		tx, err := dbpool.Begin(context.Background()) // ADD: Må slette først alle child voice kanalene inn på disc så slette dem i databasen !!!!
+
+		if err != nil {
+			log.Println("Failed to start transaction:", err)
+			response = "Failed to start database transaction."
+			_ = sendResponse(dg, i, response)
+			return
+		}
+
+		defer func() {
+			// Rollback if the transaction was not committed
+			if err != nil {
+				_ = tx.Rollback(context.Background())
+			}
+		}()
+
+		_, err = tx.Exec(context.Background(), "DELETE FROM chiledvoice;")
+		if err != nil {
+			response = fmt.Sprintf("Error deleting from database: %v", err)
+			// No need to commit if there's an error
+			_ = sendResponse(dg, i, response)
+			return
+		}
+
+		// Commit the transaction
+		if err := tx.Commit(context.Background()); err != nil {
+			response = fmt.Sprintf("Failed to commit database transaction. Err: %s", err)
+			if err := sendResponse(dg, i, response); err != nil {
+				log.Printf("Error sending response: %v", err)
+			}
+			return
+		}
+
+		// Send success response
+		_ = sendResponse(dg, i, response)
+	},
 
 	"help": func(dg *discordgo.Session, i *discordgo.InteractionCreate) {
 		if err := acknowledgeInteraction(dg, i); err != nil {
@@ -196,6 +244,8 @@ var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.Intera
 		> **/creategame <name of the game> <name abbreviation> <server emoji for the game>**: This command will create everything needed to add a new game to the discord. Channels, roles, permissions and so on!
 		
 		> **/deletegame <name of the game>**: Will delete the game and everything associating with the game. Channels, roles, permissions and so on!
+
+		> **/purge**: Deletes all chiled channels!
 		`
 		_ = sendResponse(dg, i, response)
 	},

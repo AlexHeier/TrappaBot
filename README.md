@@ -1,4 +1,22 @@
 # Trappabot
+Trappa bot is a Discord bot made to manage a discord server me and my friends use. The bot will give and remove roles, create and delete voice channels and roles, scrape webpages for information, talk to OpenAI and allot more!
+
+Warning: The DLL i used to interact with discords API, discordgo (https://github.com/bwmarrin/discordgo). I could not make it work when i had the discord interaction doxygen between several files. So EVERYTHING is in the main.go. However, the code is commented with doxygen.
+
+## Commands
+
+Ｃｏｍｍａｎｄｓ:
+**/event <ping> <event description> <event start time> optional: <person limit>**: This command will create a message that people can react to. This will notify the participants when the event start. You can also set the max amout of people allowed at the event!
+		
+**/help**: Responds with _this_ message.
+		 
+Ａｄｍｉｎ Ｃｏｍｍａｎｄｓ:
+**/creategame <name of the game> <name abbreviation> <server emoji for the game>**: This command will create everything needed to add a new game to the discord. Channels, roles, permissions and so on!
+		
+**/deletegame <name of the game>**: Will delete the game and everything associating with the game. Channels, roles, permissions and so on!
+
+**/purge**: Deletes all chiled channels!
+
 
 ## Database
 
