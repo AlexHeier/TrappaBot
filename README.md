@@ -1,9 +1,45 @@
 # Trappabot
 Trappa bot is a Discord bot made to manage a discord server me and my friends use. The bot will give and remove roles, create and delete voice channels and roles, scrape webpages for information, talk to OpenAI and allot more!
 
-Warning: The DLL i used to interact with discords API, discordgo (https://github.com/bwmarrin/discordgo). I could not make it work when i had the discord interaction doxygen between several files. So EVERYTHING is in the main.go. However, the code is commented with doxygen.
+Warning: The DLL i used to interact with discords API, discordgo (https://github.com/bwmarrin/discordgo). I could not make it work when i had the discord interaction between several files. So EVERYTHING is in the main.go. However, the code is commented with doxygen.
 
-## Commands
+## Useing the bot
+
+### Before use
+The bot uses a database that it need access to before the bot will be able to start. The SQL of the database is at the end of the file. You will also need these values, ive added them to a .env file personaly. The code will also be able to find a .env file and use them en enviorment varables.
+
+```
+DISCORD_BOT_TOKEN=""
+
+OPENAI_API_KEY=""
+
+ADMIN_ID=""
+
+DB_USER=""
+DB_PASSWORD=""
+DB_HOST=""
+DB_PORT=""
+DB_NAME=""
+```
+
+you will also need to change these values at the top of the file:
+
+var messageId = "1230141184664535051"
+var channelRoles = "1230127864519852104"
+var channelReview = "1013473566806786058"
+var GuildID = "1012016741238448278"
+var rustUpdateChannel = "1243953919621861428"
+
+channelRoles and messageId is for the message in the channel people can interact with to get given roles based on games.
+
+channelReview is for the channel the bot will react to how deadly the staircase you'll send in an image is. 
+
+GuildID is the ID of the discord server.
+
+rustUpdateChannel is for the channel where the bot will check every 2 min for changes to the game rust's change log.
+
+### Commands
+The / commands the bot uses. (this message is also the reponse to /help)
 
 Ｃｏｍｍａｎｄｓ:
 
