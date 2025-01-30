@@ -160,7 +160,7 @@ var commands = []*discordgo.ApplicationCommand{
 			{
 				Type:        discordgo.ApplicationCommandOptionString,
 				Name:        "when",
-				Description: "when the event will take place written as 'HH:MM DD.MM.YY' uses Oslo time. E.g 23:30 21/08/24",
+				Description: "when the event will take place written as 'HH:MM' uses Oslo time. E.g 23:30",
 				Required:    true,
 			},
 			{
@@ -276,7 +276,7 @@ var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.Intera
 			}
 		}
 
-		location, err := time.LoadLocation("Europe/Oslo") // Use "Europe/Oslo" for CEST/CET
+		location, err := time.LoadLocation("Europe/Oslo") //"Europe/Oslo" for CEST/CET
 		if err != nil {
 			response := "Error loading timezone"
 			_ = sendResponse(dg, i, response)
@@ -284,7 +284,7 @@ var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.Intera
 		}
 
 		// Parse the event time
-		timeLayout := "15:04 02.01.06" // Format for HH:MM DD.MM.YY
+		timeLayout := "15:04" // Format for HH:MM
 		t, err := time.ParseInLocation(timeLayout, timeUnParsed, location)
 		if err != nil {
 			response := "Error parsing time format"
@@ -294,7 +294,7 @@ var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.Intera
 		unixTime := t.Unix()
 
 		// Channel where the event will be created
-		eventChannelID := "1275834535996559400" // Test channel
+		eventChannelID := "1275834535996559400"
 
 		// Build the message content
 		messageContent := fmt.Sprintf("%s\n**Event Description:** %s\n**Time:** <t:%d:R>", ping, description, unixTime)
@@ -958,7 +958,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		resp, err := client.CreateChatCompletion(
 			context.Background(),
 			openai.ChatCompletionRequest{
-				Model: openai.GPT4VisionPreview,
+				Model: openai.GPT4o,
 				Messages: []openai.ChatCompletionMessage{
 					{
 						Role:    openai.ChatMessageRoleSystem,

@@ -5,8 +5,9 @@ go 1.21.6
 require (
 	github.com/bwmarrin/discordgo v0.28.1
 	github.com/gocolly/colly v1.2.0
+	github.com/jackc/pgx/v4 v4.18.3
 	github.com/joho/godotenv v1.5.1
-	github.com/sashabaranov/go-openai v1.23.0
+	github.com/sashabaranov/go-openai v1.36.1
 )
 
 require (
@@ -26,7 +27,6 @@ require (
 	github.com/jackc/pgproto3/v2 v2.3.3 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20221227161230-091c0ba34f0a // indirect
 	github.com/jackc/pgtype v1.14.0 // indirect
-	github.com/jackc/pgx/v4 v4.18.3 // indirect
 	github.com/jackc/puddle v1.3.0 // indirect
 	github.com/kennygrant/sanitize v1.2.4 // indirect
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d // indirect
