@@ -283,9 +283,16 @@ var commandHandlers = map[string]func(dg *discordgo.Session, i *discordgo.Intera
 			return
 		}
 
+		currentYear := time.Now().Year()
+		currentMonth := time.Now().Month()
+		currentDay := time.Now().Day()
+
 		// Parse the event time
-		timeLayout := "15:04" // Format for HH:MM
-		t, err := time.ParseInLocation(timeLayout, timeUnParsed, location)
+		timeLayout := "2006 01 02 15:04"
+
+		timeWithCurrentYear := fmt.Sprintf("%d %02d %02d %s", currentYear, int(currentMonth), currentDay, timeUnParsed)
+
+		t, err := time.ParseInLocation(timeLayout, timeWithCurrentYear, location)
 		if err != nil {
 			response := "Error parsing time format"
 			_ = sendResponse(dg, i, response)
